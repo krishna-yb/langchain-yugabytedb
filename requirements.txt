@@ -1,0 +1,33 @@
+# Core LangChain packages
+langchain>=0.3.27
+langchain-core>=0.3.78,<1.0.0
+langchain-text-splitters>=0.3.9,<1.0.0
+langchain-openai>=0.3.35
+langchain-postgres>=0.0.12
+langchain-community>=0.4.1
+
+# YugabyteDB/PostgreSQL drivers
+psycopg>=3,<4
+psycopg-pool>=3.2.1,<4
+psycopg2-binary>=2.9.9  # For PGVector compatibility tests
+asyncpg>=0.30.0
+
+# Vector and database support
+pgvector>=0.2.5,<0.4
+sqlalchemy>=2,<3
+greenlet>=3.2.3
+
+# Math and utilities
+numpy>=1.21,<3
+
+# Testing
+pytest>=9.0.2
+pytest-asyncio>=0.25.3
+
+# OpenAI
+openai>=1.0.0  # Required by langchain-openai
+
+# Memory types support
+# - ConversationEntityMemory and ConversationKGMemory require langchain-community
+# - NetworkX (for knowledge graph memory)
+networkx>=3.0  # Dependency of ConversationKGMemory

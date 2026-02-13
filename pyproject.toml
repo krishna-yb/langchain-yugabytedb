@@ -33,6 +33,14 @@ test = [
     "pytest-timeout>=2.3.1",
     "ruff>=0.9.7",
 ]
+demo = [
+    "langchain>=0.3.27",
+    "langchain-openai>=0.3.35",
+    "langchain-postgres>=0.0.12",
+    "langchain-community>=0.4.1",
+    "psycopg2-binary>=2.9.9",
+    "networkx>=3.0",
+]
 
 [tool.ruff.lint]
 select = [

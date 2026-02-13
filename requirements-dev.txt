@@ -1,0 +1,18 @@
+# Development dependencies for demos, tests, and examples
+# Install with: pip install -r requirements-dev.txt
+
+# Base requirements
+-r requirements.txt
+
+# Additional test dependencies
+langchain-tests>=0.3.7
+pytest-cov>=6.0.0
+pytest-mock>=3.14.0
+pytest-socket>=0.7.0
+pytest-timeout>=2.3.1
+mypy>=1.15.0
+ruff>=0.9.7
+
+# Code quality
+black>=24.0.0
+isort>=5.13.0

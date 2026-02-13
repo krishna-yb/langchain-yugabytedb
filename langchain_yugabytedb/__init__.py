@@ -1,6 +1,7 @@
 from importlib import metadata
 
 from langchain_yugabytedb.chat_message_histories import YugabyteDBChatMessageHistory
+from langchain_yugabytedb.retrievers import PgDistRagRetriever
 from langchain_yugabytedb.translator import YugabyteDBVectorTranslator
 from langchain_yugabytedb.yb_engine import YBEngine
 from langchain_yugabytedb.vectorstores import YugabyteDBVectorStore
@@ -22,4 +23,5 @@ __all__ = [
     "YugabyteDBVectorStore",
     "YugabyteDBVectorTranslator",
     "AsyncYugabyteDBVectorStore",
+    "PgDistRagRetriever",
 ]
