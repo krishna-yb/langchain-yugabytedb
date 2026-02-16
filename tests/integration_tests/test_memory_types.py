@@ -8,6 +8,7 @@ import os
 import uuid
 import pytest
 import psycopg
+from langchain_core.documents import Document
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_yugabytedb import PgDistRagRetriever
 from langchain.chains import ConversationalRetrievalChain
@@ -21,7 +22,8 @@ from langchain.memory import (
 
 # Optional memory types that require langchain-community
 try:
-    from langchain.memory import ConversationEntityMemory, ConversationKGMemory
+    from langchain.memory import ConversationEntityMemory
+    from langchain_community.memory.kg import ConversationKGMemory
     HAS_ENTITY_MEMORY = True
 except ImportError:
     HAS_ENTITY_MEMORY = False
@@ -30,9 +32,13 @@ from langchain_postgres.chat_message_histories import PostgresChatMessageHistory
 
 # Test configuration
 DB_CONNECTION = "postgresql+psycopg://yugabyte:yugabyte@127.0.0.1:5433/yugabyte"
-DB_CONN_DIRECT = "postgresql://yugabyte:yugabyte@127.0.0.1:5433/yugabyte"
 INDEX_NAME = "test_index"
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+
+def to_direct_psycopg_conn_str(connection_string: str) -> str:
+    """Convert SQLAlchemy psycopg URL to psycopg direct connection URL."""
+    return connection_string.replace("postgresql+psycopg://", "postgresql://", 1)
 
 
 @pytest.fixture
@@ -44,14 +50,30 @@ def embeddings():
     )
 
 
-@pytest.fixture
-def retriever(embeddings):
-    """Create PgDistRagRetriever instance."""
-    return PgDistRagRetriever(
+@pytest.fixture(params=["pg_dist_rag", "vanilla_pgvector"])
+def retriever(request, embeddings):
+    """Create retriever instance for both pg_dist_rag and vanilla PGVector."""
+    if request.param == "pg_dist_rag":
+        return PgDistRagRetriever(
+            embeddings=embeddings,
+            connection_string=DB_CONNECTION,
+            index_name=INDEX_NAME
+        )
+
+    # Vanilla path: standard PGVector collection/retriever.
+    collection_name = f"memory_types_vanilla_{uuid.uuid4().hex[:8]}"
+    vector_store = PGVector(
         embeddings=embeddings,
-        connection_string=DB_CONNECTION,
-        index_name=INDEX_NAME
+        connection=DB_CONNECTION,
+        collection_name=collection_name,
+        use_jsonb=True,
     )
+    vector_store.add_documents([
+        Document(page_content="YugabyteDB is a distributed SQL database."),
+        Document(page_content="It supports horizontal scaling and high availability."),
+        Document(page_content="YSQL and YCQL APIs are available."),
+    ])
+    return vector_store.as_retriever(search_kwargs={"k": 3})
 
 
 @pytest.fixture
@@ -83,12 +105,12 @@ class TestConversationBufferMemory:
         )
         
         # First question
-        result1 = qa_chain({"question": "What is YugabyteDB?"})
+        result1 = qa_chain.invoke({"question": "What is YugabyteDB?"})
         assert "answer" in result1
         assert len(result1["source_documents"]) > 0
         
         # Follow-up question (should use memory)
-        result2 = qa_chain({"question": "What are its key features?"})
+        result2 = qa_chain.invoke({"question": "What are its key features?"})
         assert "answer" in result2
         
         # Verify memory has both turns
@@ -117,9 +139,9 @@ class TestConversationBufferWindowMemory:
         )
         
         # Ask 3 questions
-        qa_chain({"question": "What is YugabyteDB?"})
-        qa_chain({"question": "What is distributed SQL?"})
-        qa_chain({"question": "What about scalability?"})
+        qa_chain.invoke({"question": "What is YugabyteDB?"})
+        qa_chain.invoke({"question": "What is distributed SQL?"})
+        qa_chain.invoke({"question": "What about scalability?"})
         
         # Memory should only have last 2 exchanges (4 messages)
         chat_history = memory.load_memory_variables({})["chat_history"]
@@ -147,8 +169,8 @@ class TestConversationSummaryMemory:
         )
         
         # Multiple questions
-        qa_chain({"question": "What is YugabyteDB?"})
-        qa_chain({"question": "What databases does it support?"})
+        qa_chain.invoke({"question": "What is YugabyteDB?"})
+        qa_chain.invoke({"question": "What databases does it support?"})
         
         # Should have a summary
         summary = memory.load_memory_variables({})
@@ -177,8 +199,8 @@ class TestConversationSummaryBufferMemory:
         )
         
         # Ask questions
-        qa_chain({"question": "What is YugabyteDB?"})
-        qa_chain({"question": "Explain its architecture in detail."})
+        qa_chain.invoke({"question": "What is YugabyteDB?"})
+        qa_chain.invoke({"question": "Explain its architecture in detail."})
         
         # Memory should manage buffer/summary automatically
         memory_vars = memory.load_memory_variables({})
@@ -194,6 +216,8 @@ class TestConversationEntityMemory:
         memory = ConversationEntityMemory(
             llm=llm,
             memory_key="chat_history",
+            chat_history_key="chat_history",
+            input_key="question",
             return_messages=True,
             output_key="answer"
         )
@@ -207,10 +231,10 @@ class TestConversationEntityMemory:
         )
         
         # Ask about specific entities
-        qa_chain({"question": "What is YugabyteDB?"})
+        qa_chain.invoke({"question": "What is YugabyteDB?"})
         
-        # Memory should track entities
-        memory_vars = memory.load_memory_variables({})
+        # Memory should track entities. Provide an input key as required by entity memory.
+        memory_vars = memory.load_memory_variables({"question": "What is YugabyteDB?"})
         assert "chat_history" in memory_vars
         # Entities are stored in memory.entity_store
 
@@ -237,10 +261,10 @@ class TestConversationKGMemory:
         )
         
         # Build knowledge through questions
-        qa_chain({"question": "What is YugabyteDB?"})
+        qa_chain.invoke({"question": "What is YugabyteDB?"})
         
-        # Memory builds knowledge graph internally
-        memory_vars = memory.load_memory_variables({})
+        # Memory builds knowledge graph internally. Provide input key required by KG memory.
+        memory_vars = memory.load_memory_variables({"question": "What is YugabyteDB?"})
         assert "chat_history" in memory_vars
 
 
@@ -291,7 +315,7 @@ class TestPostgresChatMessageHistory:
         table_name = "langchain_chat_history"
         
         # Create direct connection for chat history
-        conn = psycopg.connect(DB_CONN_DIRECT)
+        conn = psycopg.connect(to_direct_psycopg_conn_str(DB_CONNECTION))
         
         # Initialize chat history
         message_history = PostgresChatMessageHistory(
@@ -320,10 +344,10 @@ class TestPostgresChatMessageHistory:
         )
         
         # Ask questions
-        result1 = qa_chain({"question": "What is YugabyteDB?"})
+        result1 = qa_chain.invoke({"question": "What is YugabyteDB?"})
         assert "answer" in result1
         
-        result2 = qa_chain({"question": "What are its benefits?"})
+        result2 = qa_chain.invoke({"question": "What are its benefits?"})
         assert "answer" in result2
         
         # Verify persistence by creating new memory with same session
@@ -337,6 +361,67 @@ class TestPostgresChatMessageHistory:
         assert len(messages) == 4  # 2 questions + 2 answers
         
         conn.close()
+
+
+class TestRetrieverCompatibility:
+    """Ensure both pg_dist_rag and vanilla retrievers work with one base URL."""
+
+    def test_db_connection_conversion(self):
+        direct = to_direct_psycopg_conn_str(DB_CONNECTION)
+        assert direct.startswith("postgresql://")
+        assert "postgresql+psycopg://" not in direct
+
+    def test_both_retrievers_work(self, embeddings, llm):
+        # pg_dist_rag retriever path
+        pg_dist_rag_retriever = PgDistRagRetriever(
+            embeddings=embeddings,
+            connection_string=DB_CONNECTION,
+            index_name=INDEX_NAME
+        )
+        rag_memory = ConversationBufferMemory(
+            memory_key="chat_history",
+            return_messages=True,
+            output_key="answer"
+        )
+        rag_chain = ConversationalRetrievalChain.from_llm(
+            llm=llm,
+            retriever=pg_dist_rag_retriever,
+            memory=rag_memory,
+            return_source_documents=True,
+            verbose=False
+        )
+        rag_result = rag_chain.invoke({"question": "What is YugabyteDB?"})
+        assert "answer" in rag_result
+        assert len(rag_result["source_documents"]) > 0
+
+        # vanilla PGVector retriever path
+        collection_name = f"chat_memory_vanilla_{uuid.uuid4().hex[:8]}"
+        vanilla_store = PGVector(
+            embeddings=embeddings,
+            connection=DB_CONNECTION,
+            collection_name=collection_name,
+            use_jsonb=True,
+        )
+        vanilla_store.add_documents([
+            Document(page_content="YugabyteDB is a distributed SQL database."),
+            Document(page_content="It supports horizontal scaling and high availability."),
+        ])
+        vanilla_retriever = vanilla_store.as_retriever(search_kwargs={"k": 2})
+        vanilla_memory = ConversationBufferMemory(
+            memory_key="chat_history",
+            return_messages=True,
+            output_key="answer"
+        )
+        vanilla_chain = ConversationalRetrievalChain.from_llm(
+            llm=llm,
+            retriever=vanilla_retriever,
+            memory=vanilla_memory,
+            return_source_documents=True,
+            verbose=False
+        )
+        vanilla_result = vanilla_chain.invoke({"question": "What is YugabyteDB?"})
+        assert "answer" in vanilla_result
+        assert len(vanilla_result["source_documents"]) > 0
 
 
 
